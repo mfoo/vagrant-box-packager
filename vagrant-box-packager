@@ -1,0 +1,176 @@
+#!/usr/bin/env ruby
+
+#
+# vagrant-box-packager
+# Author: Martin Foot <martin@mfoot.com>
+#
+# Basic tool to exports an existing Vagrant virtual machine as a new box file that can be re-used
+# as a Vagrant base box. Produces an output compatible with Vagrant's config.vm.box_url setting.
+# The produced box file and metadata.json file can be copied to a web server and used with Vagrant.
+# For instance:
+#
+# $ vagrant init 'hashicorp/precise64'
+# # Do some work to make your new base box
+# $ vagrant-box-packager -v 0.0.1 -n 'mfoo/base_box' -t http://localhost:8081/files
+#
+# The script will produce a metadata.json file in the current directory and a directoy called
+# 'mfoo' with the base_box image inside it. These two files should then be copied to the web server
+# such that they become available at http://localhost:8081/files/mfoo/metadata.json and
+# http://localhost:8081/files/mfoo/base_box-0.0.1.box.
+#
+# They can then be used in another Vagrant project:
+#
+# $ vagrant init http://localhost:8081/files/mfoo/metadata.json
+#
+# If you ship a new box with a newer version to the web store above, Vagrant will inform you that a
+# new version is available and the `vagrant box update` command will go and fetch it for you. To
+# use the new version of the box you must destroy your current Vagrant virtual machine and make a
+# new one.
+#
+# This tool is based on https://github.com/vube/vagrant-boxer. It is a much stripped-down testless
+# Ruby-based version that's quite specifically tailored to my needs (making pre-provisioned Vagrant
+# box updates available to people). It assumes that you're going to be hosting the box somewhere
+# and that the Vagrantfile is in $CWD. It has no dependencies outside of the Ruby standard library.
+# Improvements welcome.
+#
+
+require 'digest/sha1'
+require 'fileutils'
+require 'json'
+require 'open3'
+require 'open-uri'
+require 'optparse'
+require 'logger'
+
+@logger = Logger.new($stdout)
+
+def parse_options(args)
+  options = Hash.new
+
+  OptionParser.new do |opts|
+    opts.banner = 'Usage: vagrant-box-packager --name boxname [options]'
+
+    opts.on('-n', '--name BOXNAME', 'Name of box (e.g. mfoo/demo)') do |name|
+      options[:name] = name
+      options[:parent_name], options[:box_name] = name.split('/')
+      options[:package_name] = name.gsub(/\//, '_')
+    end
+
+    opts.on('-t', '--target-url TARGETURL', 'URL to existing metadata.json file. If specified, the produced metadata.json file will be appended to that') do |targeturl|
+      options[:target_url] = targeturl
+    end
+
+    opts.on('-v', '--version VERSION', 'The version to provide for the box') do |version|
+      options[:version] = version
+    end
+
+    opts.on('-h', '--help', 'Display this screen') do
+      puts opts
+      exit
+    end
+
+  end.parse!
+
+  raise "Version is required" if options[:version].nil?
+  raise "Name is required" if options[:name].nil?
+  raise "Target URL is required" if options[:target_url].nil?
+
+  options
+end
+
+def export_vagrant_box(options)
+  parent_name = options[:parent_name]
+  package_name = options[:package_name]
+  version_string = options[:version]
+  output_file_path = "#{parent_name}/#{package_name}-#{version_string}.box"
+  if File.exists?(parent_name)
+    if !File.directory?(parent_name)
+      @logger.error "A file called #{parent_name} already exists in this directory"
+      exit
+    end
+
+    if File.exists?(output_file_path)
+      @logger.error "Output file #{output_file_path} already exists"
+      exit
+    end
+  else
+    FileUtils.mkdir(parent_name)
+  end
+
+  @logger.info "Exporting Vagrant box to #{output_file_path}"
+  command = "vagrant package --output './#{output_file_path}'"
+  Open3.popen3(command) do |stdin, stdout, stderr, wait_thr|
+    while line = stdout.gets
+      @logger.info line
+    end
+
+    while line = stderr.gets
+      @logger.error line
+    end
+
+    exit_status = wait_thr.value
+    unless exit_status.success?
+      @logger.error 'Failed to produce Vagrant .box file'
+      exit
+    end
+  end
+
+  checksum = Digest::SHA1.hexdigest(File.read(output_file_path))
+
+  return checksum, output_file_path
+end
+
+def fetch_existing_metadata(options)
+  metadata_url = "#{options[:target_url]}/#{options[:name]}/metadata.json"
+  begin
+    data = JSON.parse(open(metadata_url).read)
+    if data['name'] != options[:name]
+      raise "Target URL seems to represent a different box. Found #{data[:name]} but expected #{options[:name]}"
+    end
+
+    data
+  rescue OpenURI::HTTPError => e
+    @logger.warn("Couldn't find existing metadata at #{metadata_url}")
+    return nil
+  rescue Exception => e
+    @logger.error("Unable to parse metadata at #{metadata_url}")
+    @logger.error(e)
+    exit
+  end
+
+end
+
+def write_metadata(options, checksum, output_file_path)
+  if File.exists?("#{options[:parent_name]}/metadata.json")
+    @logger.error 'metadata.json already exists in this directory'
+    exit
+  end
+
+  download_path = "#{options[:target_url]}/#{options[:name]}/#{output_file_path}"
+  metadata = fetch_existing_metadata(options) || {}
+  metadata['name'] = options[:name]
+  metadata['versions'] = [] if metadata['versions'].nil?
+  metadata['versions'] <<
+    {
+      'version' => options[:version],
+      'providers' => [
+        'name' => 'virtualbox',
+        'url' => download_path,
+        'checksum' => checksum,
+        'checksum_type' => 'sha1'
+      ]
+    }
+
+  File.open("#{options[:parent_name]}/metadata.json", 'w') do |file|
+    file.write(JSON.pretty_generate(metadata))
+  end
+end
+
+def main
+  options = parse_options(ARGV)
+
+  checksum, filename = export_vagrant_box(options)
+  write_metadata(options, checksum, filename)
+end
+
+main
