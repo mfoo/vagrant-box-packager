@@ -4,7 +4,7 @@
 # vagrant-box-packager
 # Author: Martin Foot <martin@mfoot.com>
 #
-# Basic tool to exports an existing Vagrant virtual machine as a new box file that can be re-used
+# A basic tool to export an existing Vagrant virtual machine as a new box file that can be re-used
 # as a Vagrant base box. Produces an output compatible with Vagrant's config.vm.box_url setting.
 # The produced box file and metadata.json file can be copied to a web server and used with Vagrant.
 # For instance:
