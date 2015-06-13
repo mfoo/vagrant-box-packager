@@ -13,14 +13,15 @@
 # # Do some work to make your new base box
 # $ vagrant-box-packager -v 0.0.1 -n 'mfoo/base_box' -t http://localhost:8081/files
 #
-# The script will produce a metadata.json file in the current directory and a directoy called
-# 'mfoo' with the base_box image inside it. These two files should then be copied to the web server
+# The script will produce a directoy called
+# 'mfoo' with the base_box image and a metadata.json file inside it. These two files should then be copied to the web server
 # such that they become available at http://localhost:8081/files/mfoo/metadata.json and
 # http://localhost:8081/files/mfoo/base_box-0.0.1.box.
 #
 # They can then be used in another Vagrant project:
 #
-# $ vagrant init http://localhost:8081/files/mfoo/metadata.json
+# $ vagrant box add http://localhost:8081/files/mfoo/metadata.json
+# $ vagrant init 'mfoo/base_box'
 #
 # If you ship a new box with a newer version to the web store above, Vagrant will inform you that a
 # new version is available and the `vagrant box update` command will go and fetch it for you. To
